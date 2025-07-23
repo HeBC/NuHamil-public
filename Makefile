@@ -14,6 +14,9 @@ Host= $(shell if hostname|grep -q apt1; then echo apt; \
   elif hostname|grep -q cedar; then echo cedar; \
   elif hostname|grep -q strongint; then echo strongint; \
   elif hostname|grep -q juwels; then echo juwels; \
+  elif hostname|grep -q Lucky; then echo Lucky; \
+  elif hostname|grep -q andes; then echo Andes; \
+  elif hostname|grep -q crc.nd.edu; then echo NotreDame; \
   else echo other; fi)
 HOST=$(strip $(Host))
 use_mkl=off
@@ -199,6 +202,133 @@ ifeq ($(strip $(HOST)),juwels)
   endif
   LINT= -i8
 endif
+
+#-----------------------------
+# My laptop (Lucky)
+#-----------------------------
+ifeq ($(strip $(HOST)),Lucky)
+  FC = gfortran
+  EXEDIR = $(CURDIR)
+
+  # Correct paths for MPI-enabled HDF5
+  HDF5_INCLUDE = -I/usr/include/hdf5/openmpi
+  HDF5_LIB     = -L/usr/lib/x86_64-linux-gnu/hdf5/openmpi
+
+  HDF5_INCLUDE = -I/usr/include/hdf5/serial
+  HDF5_LIB     = -L/usr/lib/x86_64-linux-gnu/hdf5/serial
+
+  # GSL and zlib
+  GSL_INCLUDE  = -I/usr/include/gsl
+  GSL_LIB      = -L/usr/lib/x86_64-linux-gnu
+
+  ZLIB_INCLUDE = -I/usr/include
+  ZLIB_LIB     = -L/usr/lib/x86_64-linux-gnu
+
+  # OpenBLAS 
+  OPENBLAS_INCLUDE = -I/usr/include
+  OPENBLAS_LIB     = -L/usr/lib/x86_64-linux-gnu
+
+  # Fortran flags
+  FFLAGS = -O3  -fopenmp -cpp -fdiagnostics-color=always -ffree-line-length-none \
+           -fbounds-check -g -O0 \
+           $(HDF5_INCLUDE) $(GSL_INCLUDE) $(ZLIB_INCLUDE) $(OPENBLAS_INCLUDE)
+
+  # Linker flags
+  LFLAGS = $(OPENBLAS_LIB) -lopenblas -llapack \
+           $(GSL_LIB) -lgsl -lgslcblas \
+           $(HDF5_LIB) -lhdf5_fortran -lhdf5hl_fortran -lhdf5_hl -lhdf5 \
+           $(ZLIB_LIB) -lz \
+           -Wl,-rpath,$(HDF5_LIB) \
+           -Wl,-rpath,$(OPENBLAS_LIB) \
+           -Wl,-rpath,$(GSL_LIB)
+
+  FCHIRAL = $(FFLAGS)
+  FLINES =
+
+  ifeq ($(DEBUG_MODE),on)
+    DFLAGS += -check all
+  endif
+
+  LINT = -fdefault-integer-8
+endif
+
+#-----------------------------
+# Andes OLCF ORNL
+#-----------------------------
+ifeq ($(strip $(HOST)),Andes)
+
+  # Compiler
+  FC = gfortran
+
+  # Compilation flags
+  FFLAGS = -O3 -fopenmp -ffree-line-length-none -Wno-line-truncation
+  FFLAGS += -DVERSION=\"$(VERSION)\"
+
+  # HDF5 built with GCC 10.3.0
+  HDF5_PATH = /sw/andes/spack-envs/base/opt/linux-rhel8-x86_64/gcc-10.3.0/hdf5-1.10.7-kfa64v5mu6b5hy7tydr2fty6l4bqeegh
+  OPENBLAS_ROOT = /sw/andes/spack-envs/base/opt/linux-rhel8-x86_64/gcc-8.3.1/openblas-0.3.19-fe3th3x7u2wkqnwhrxclrk7ywjm5nac5
+
+  FFLAGS += -I$(OPENBLAS_ROOT)/include
+  LFLAGS += -L$(OPENBLAS_ROOT)/lib -lopenblas
+
+  FFLAGS += -I$(HDF5_PATH)/include
+  LFLAGS += -L$(HDF5_PATH)/lib -lhdf5_fortran -lhdf5
+
+  # Other libraries
+  LFLAGS += -lgsl -lz -lm -ldl
+
+  # Integer promotion
+  LINT = -fdefault-integer-8
+
+  # Custom build targets
+  FCHIRAL = $(FFLAGS)
+  FLINES =
+
+  # Output directory
+  EXEDIR =  $(CURDIR)/bin
+
+endif
+
+
+#--------------------------------------------------
+# Notre Dame CRC
+#--------------------------------------------------
+ifeq ($(strip $(HOST)),NotreDame)
+  FDEP=makedepf90
+  FC=gfortran
+  ifeq ($(MPI), on)
+    FC=mpif90 -DMPI -DSPARC
+  endif
+
+  # Load HDF5 environment
+  HDF5_DIR ?= /afs/crc.nd.edu/x86_64_linux/h/hdf5/1.14.4/intel/24.2
+
+  # Compiler and linker flags
+  FFLAGS  += -I$(HDF5_DIR)/include
+  LFLAGS  += -L$(HDF5_DIR)/lib -lgsl -lz -lhdf5_fortran -lhdf5 -lm -ldl
+  use_mkl = on
+  ifeq ($(use_mkl), on)
+    LFLAGS  += -lmkl_intel_lp64 -lmkl_gnu_thread -lmkl_core -lpthread
+  else
+    LFLAGS  += -lblas -llapack
+  endif
+
+  FFLAGS  += -O3 -fopenmp  -Wno-line-truncation -DVERSION=\"$(VERSION)\"
+  FLINES   = -ffree-line-length-none # -ffree-line-length-0
+  FCHIRAL  = $(FFLAGS)
+
+  ifeq ($(DEBUG_MODE),on)
+    DFLAGS += -pedantic -fbounds-check -O -Wuninitialized -fbacktrace
+    ifneq ($(OS), OSX)
+      DFLAGS += -pg -g
+    endif
+  endif
+
+  LINT = -fdefault-integer-8
+endif
+
+
+
 
 ifeq ($(DEBUG_MODE),on)
   #DFLAGS+=-DTwoBodyRelativeChannelDebug
