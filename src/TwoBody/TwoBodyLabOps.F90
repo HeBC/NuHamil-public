@@ -235,19 +235,32 @@ contains
     type(TwoBodyLabPNSpace), intent(in), target :: ms_new
     type(TwoBodyLabOp) :: op
     type(TwoBodyLabPNChan), pointer :: chbra, chket
-    integer :: ichbra, jbra, bra, a, b
-    integer :: ichket, jket, ket, c, d
+    integer :: ichbra, jbra, bra, a, b, bra_old, ia, ib
+    integer :: ichket, jket, ket, c, d, ket_old, ic, id
+    type(SingleParticleOrbit), pointer :: oa, ob, oc, od
     real(8) :: time
     type(sys) :: s
 
     time = omp_get_wtime()
     call op%init( ms_new, this%GetOpName() )
 
-    op%OneBody%m(:,:) = this%OneBody%m(:ms_new%sps%norbs, :ms_new%sps%norbs)
+    do bra = 1, ms_new%sps%norbs
+      oa => ms_new%sps%GetOrbit(bra)
+      if(2*oa%n + oa%l > this%ms%GetEmax()) cycle
+      do ket = 1, ms_new%sps%norbs
+        ob => ms_new%sps%GetOrbit(bra)
+        if(2*ob%n + ob%l > this%ms%GetEmax()) cycle
+
+        bra_old = this%ms%sps%nljz2idx(oa%n, oa%l, oa%j, oa%z)
+        ket_old = this%ms%sps%nljz2idx(ob%n, ob%l, ob%j, ob%z)
+
+        op%OneBody%m(bra,ket) = this%OneBody%m(bra_old, ket_old)
+      end do
+    end do
 
     !$omp parallel
     !$omp do private( ichbra, ichket, chbra, chket, &
-    !$omp &  jbra, jket, bra, a, b, ket, c, d ) schedule(dynamic)
+    !$omp &  jbra, jket, bra, a, b, oa, ob, ket, c, d, oc, od, ia, ib, ic, id) schedule(dynamic)
     do ichbra = 1, ms_new%GetNumberChannels()
       do ichket = 1, ms_new%GetNumberChannels()
         if( op%MatCh(ichbra,ichket)%Zero ) cycle
@@ -259,10 +272,24 @@ contains
         do bra = 1, chbra%GetNumberStates()
           a = chbra%n2label1( bra )
           b = chbra%n2label2( bra )
+          oa => ms_new%sps%GetOrbit(a)
+          ob => ms_new%sps%GetOrbit(b)
+          if(2*oa%n + oa%l > this%ms%GetEmax()) cycle
+          if(2*ob%n + ob%l > this%ms%GetEmax()) cycle
+          if(2*oa%n + oa%l + 2*ob%n + ob%l > this%ms%GetE2max()) cycle
           do ket = 1, chket%GetNumberStates()
             c = chket%n2label1( ket )
             d = chket%n2label2( ket )
-            op%MatCh(ichbra,ichket)%m(bra,ket) = this%GetTBME(a,b,c,d,Jbra,Jket)
+            oc => ms_new%sps%GetOrbit(c)
+            od => ms_new%sps%GetOrbit(d)
+            if(2*oc%n + oc%l > this%ms%GetEmax()) cycle
+            if(2*od%n + od%l > this%ms%GetEmax()) cycle
+            if(2*oc%n + oc%l + 2*od%n + od%l > this%ms%GetE2max()) cycle
+            ia = this%ms%sps%nljz2idx(oa%n, oa%l, oa%j, oa%z)
+            ib = this%ms%sps%nljz2idx(ob%n, ob%l, ob%j, ob%z)
+            ic = this%ms%sps%nljz2idx(oc%n, oc%l, oc%j, oc%z)
+            id = this%ms%sps%nljz2idx(od%n, od%l, od%j, od%z)
+            op%MatCh(ichbra,ichket)%m(bra,ket) = this%GetTBME(ia,ib,ic,id,Jbra,Jket)
           end do
         end do
 
@@ -2411,8 +2438,8 @@ contains
               if(c == d) norm_fact = 1.d0/sqrt(2.d0) * norm_fact
 
               do J = Jmin, Jmax
-                me_pp = this%GetTBME(ap,bp,cp,dp,J,J) 
-                me_nn = this%GetTBME(an,bn,cn,dn,J,J) 
+                me_pp = this%GetTBME(ap,bp,cp,dp,J,J)
+                me_nn = this%GetTBME(an,bn,cn,dn,J,J)
                 me_00 = 0.5d0 * norm_fact * (this%GetTBME(ap,bn,cp,dn,J,J) + &
                     & this%GetTBME(an,bp,cn,dp,J,J) - ( &
                     & this%GetTBME(ap,bn,cn,dp,J,J) + &
@@ -3193,17 +3220,7 @@ contains
     read(15,*)
     do i = 1, cnt
       read(15,*) a, b, c, d, J, v
-      oa => ms%sps%orb(a)
-      ob => ms%sps%orb(b)
-      oc => ms%sps%orb(c)
-      od => ms%sps%orb(d)
-      if(oa%z + ob%z /= oc%z + od%z) cycle
-      if((-1) ** (oa%l + ob%l + oc%l + od%l) /= 1) cycle
-      ch = ms%jpz2idx(J, (-1)**(oa%l+ob%l), (oa%z+ob%z)/2)
-      bra = ms%jpz(ch)%GetIndex(a,b)
-      ket = ms%jpz(ch)%GetIndex(c,d)
-      ph = ms%jpz(ch)%GetPhase(a,b) * ms%jpz(ch)%GetPhase(c,d)
-      this%MatCh(ch,ch)%m(bra,ket) = v * ph
+      call this%SetTBME(a,b,c,d,J,v)
     end do
     close(15)
   end subroutine read_scalar_operator_ascii_myg
@@ -3232,17 +3249,7 @@ contains
       d = id(i)
       J = jj(i)
       v = v2(i)
-      oa => ms%sps%orb(a)
-      ob => ms%sps%orb(b)
-      oc => ms%sps%orb(c)
-      od => ms%sps%orb(d)
-      if(oa%z + ob%z /= oc%z + od%z) cycle
-      if((-1) ** (oa%l + ob%l + oc%l + od%l) /= 1) cycle
-      ch = ms%jpz2idx(J, (-1)**(oa%l+ob%l), (oa%z+ob%z)/2)
-      bra = ms%jpz(ch)%GetIndex(a,b)
-      ket = ms%jpz(ch)%GetIndex(c,d)
-      ph = ms%jpz(ch)%GetPhase(a,b) * ms%jpz(ch)%GetPhase(c,d)
-      this%MatCh(ch,ch)%m(bra,ket) = v * ph
+      call this%SetTBME(a,b,c,d,J,v)
     end do
 
     deallocate(ia)
@@ -3304,11 +3311,7 @@ contains
       b = sps%nljz2idx(ob%n, ob%l, ob%j, ob%z)
       c = sps%nljz2idx(oc%n, oc%l, oc%j, oc%z)
       d = sps%nljz2idx(od%n, od%l, od%j, od%z)
-      ch = two%jpz2idx(J, (-1)**(oa%l+ob%l), (oa%z+ob%z)/2)
-      bra = two%jpz(ch)%GetIndex(a,b)
-      ket = two%jpz(ch)%GetIndex(c,d)
-      ph = two%jpz(ch)%GetPhase(a,b) * two%jpz(ch)%GetPhase(c,d)
-      this%MatCh(ch,ch)%m(bra,ket) = me * ph
+      call this%SetTBME(a,b,c,d,J,me)
     end do
     close(15)
 
@@ -3343,8 +3346,8 @@ contains
       call sps_snt%orb(idx)%set(n,l,j,z,idx)
     end do
 
-    call skip_comment(15,'#')
-    read(15,*) zero_body
+    !call skip_comment(15,'#')
+    !read(15,*) zero_body
     call skip_comment(15,'#')
     read(15,*) lines
     call skip_comment(15,'#')
@@ -3367,11 +3370,7 @@ contains
       b = sps%nljz2idx(ob%n, ob%l, ob%j, ob%z)
       c = sps%nljz2idx(oc%n, oc%l, oc%j, oc%z)
       d = sps%nljz2idx(od%n, od%l, od%j, od%z)
-      ch = two%jpz2idx(J, (-1)**(oa%l+ob%l), (oa%z+ob%z)/2)
-      bra = two%jpz(ch)%GetIndex(a,b)
-      ket = two%jpz(ch)%GetIndex(c,d)
-      ph = two%jpz(ch)%GetPhase(a,b) * two%jpz(ch)%GetPhase(c,d)
-      this%MatCh(ch,ch)%m(bra,ket) = me * ph
+      call this%SetTBME(a, b, c, d, J, me)
     end do
     close(15)
     call sps_snt%fin()
@@ -3432,7 +3431,7 @@ contains
       ph = two%jpz(ch)%GetPhase(a,b) * two%jpz(ch)%GetPhase(c,d)
       Tcm2 = p_dot_p([oa%n, oa%l, oa%j, oa%z], [ob%n, ob%l, ob%j, ob%z], &
           & [oc%n, oc%l, oc%j, oc%z], [od%n, od%l, od%j, od%z], j) * dble(two%mass_snt) / two%GetFrequency()
-      v = me + Tcm2
+      call this%SetTBME(a,b,c,d,J,v)
       this%MatCh(ch,ch)%m(bra,ket) = v * ph
     end do
     close(15)
